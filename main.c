@@ -53,37 +53,8 @@ __INLINE static void systick_delay (uint32_t delayTicks) {
 }
 
 /****************
- *	UART INIT
- ****************/
-
-void pinsel_uart3(void){
-    PINSEL_CFG_Type PinCfg;
-    PinCfg.Funcnum = 2;
-    PinCfg.Pinnum = 0;
-    PinCfg.Portnum = 0;
-    PINSEL_ConfigPin(&PinCfg);
-    PinCfg.Pinnum = 1;
-    PINSEL_ConfigPin(&PinCfg);
-}
-
-void init_uart(void){
-    UART_CFG_Type uartCfg;
-    uartCfg.Baud_rate = 115200;
-    uartCfg.Databits = UART_DATABIT_8;
-    uartCfg.Parity = UART_PARITY_NONE;
-    uartCfg.Stopbits = UART_STOPBIT_1;
-    //pin select for uart3;
-    pinsel_uart3();
-    //supply power & setup working parameters for uart3
-    UART_Init(LPC_UART3, &uartCfg);
-    //enable transmit for uart3
-    UART_TxCmd(LPC_UART3, ENABLE);
-}
-
-/****************
  *	SSP INIT
  ****************/
-
 static void init_ssp(void)
 {
 	SSP_CFG_Type SSP_ConfigStruct;
@@ -148,7 +119,7 @@ static void init_i2c(void)
  ****************/
 static void init_GPIO(void)
 {
-	// Initialize button
+	// Initialize Switch 4
 	PINSEL_CFG_Type PinCfg;
 	PinCfg.Funcnum = 0;						//sw4
 	PinCfg.Portnum = 1;
@@ -156,29 +127,66 @@ static void init_GPIO(void)
 	PINSEL_ConfigPin(&PinCfg);
 	GPIO_SetDir(1, 1<<31, 0);
 
-
-	PinCfg.Funcnum = 0;						//sw3 Config
+	// Initialize Switch 3
+	PinCfg.Funcnum = 0;						//sw3
 	PinCfg.Portnum = 2;
 	PinCfg.Pinnum = 10;
 	PINSEL_ConfigPin(&PinCfg);
 	GPIO_SetDir(2, 1<<10, 0);
 }
 
-void caretaker(void)
-{
-	led7seg_setChar('{', FALSE); // clear 7 segment display
-	oled_clearScreen(OLED_COLOR_BLACK); // clear OLED display
-	GPIO_ClearValue( 0, (1<<26) ); // clear blue LED
-	GPIO_ClearValue( 2, (1<<0) ); // clear red LED
-	light_shutdown(); // shutdown light sensor
+/****************
+ *	UART INIT
+ ****************/
+void pinsel_uart3(void){
+    PINSEL_CFG_Type PinCfg;
+    PinCfg.Funcnum = 2;
+    PinCfg.Pinnum = 0;
+    PinCfg.Portnum = 0;
+    PINSEL_ConfigPin(&PinCfg);
+    PinCfg.Pinnum = 1;
+    PINSEL_ConfigPin(&PinCfg);
 }
 
+void init_uart(void){
+    UART_CFG_Type uartCfg;
+    uartCfg.Baud_rate = 115200;
+    uartCfg.Databits = UART_DATABIT_8;
+    uartCfg.Parity = UART_PARITY_NONE;
+    uartCfg.Stopbits = UART_STOPBIT_1;
+    //pin select for uart3;
+    pinsel_uart3();
+    //supply power & setup working parameters for uart3
+    UART_Init(LPC_UART3, &uartCfg);
+    //enable transmit for uart3
+    UART_TxCmd(LPC_UART3, ENABLE);
+}
 
+/****************
+ *	INTERUPT INIT
+ ****************/
+void extInteruptInit(void)
+{
+	NVIC_ClearPendingIRQ(EINT3_IRQn);
+	NVIC_EnableIRQ(EINT3_IRQn);
+
+	LPC_SC->EXTINT = 1;  /* Clear Interrupt Flag */
+	NVIC_ClearPendingIRQ(EINT0_IRQn);
+	NVIC_EnableIRQ(EINT0_IRQn);
+
+	//https://www.exploreembedded.com/wiki/LPC1768:_External_Interrupts
+}
 
 void EINT3_IRQHandler(void)
 {
-
 	if ((LPC_GPIOINT -> IO2IntStatF>>10) & 0x01)
+	{
+		printf("Sw3 is on interrupt \n");
+		LPC_GPIOINT -> IO2IntClr |=  1 << 10;
+	}
+
+
+	/*if ((LPC_GPIOINT -> IO2IntStatF>>10) & 0x01)
 	{
 		printf("Sw3 is on interrupt \n");
 		LPC_GPIOINT -> IO2IntClr |=  1 << 10;
@@ -193,7 +201,13 @@ void EINT3_IRQHandler(void)
 	{
 		printf("Rotary is on interrupt \n");
 		LPC_GPIOINT -> IO0IntClr |=  1 << 24;
-	}
+	}*/
+}
+
+void EINT0_IRQHandler(void)
+{
+
+	LPC_SC->EXTINT = (1<<0);  /* Clear Interrupt Flag */
 }
 
 void init(void)
@@ -207,6 +221,18 @@ void init(void)
 	rgb_init ();
 	light_init();
 	init_uart();
+
+	light_setHiThreshold(700);
+	light_setLoThreshold(50);
+}
+
+void caretaker(void)
+{
+	led7seg_setChar('{', FALSE); // clear 7 segment display
+	oled_clearScreen(OLED_COLOR_BLACK); // clear OLED display
+	GPIO_ClearValue( 0, (1<<26) ); // clear blue LED
+	GPIO_ClearValue( 2, (1<<0) ); // clear red LED
+	light_shutdown(); // shutdown light sensor
 }
 
 void uartSendMessage(uint8_t msg)
@@ -214,51 +240,49 @@ void uartSendMessage(uint8_t msg)
 	UART_Send(LPC_UART3, (uint8_t *)msg , strlen(msg), BLOCKING);
 }
 
-static char* msg = NULL;
+void sevenSegmentOut(void)
+{
+	volatile static int i = 0 ;
+	led7seg_setChar((ledArray[i%16]), FALSE);
+	systick_delay(1000);
+	i++;
+}
+
+
 
 int main (void) {
 
 	init();
-    //msg = "Entering MONITOR mode\r\n";
-	//UART_Send(LPC_UART3, (uint8_t *)msg , strlen(msg), BLOCKING);
-    //void uartSendMessage(uint8_t msg);
-
+	static char* msg = NULL;
 
     LPC_GPIOINT -> IO2IntEnF |= 1<<10;
     LPC_GPIOINT -> IO2IntEnF |= 1<<5;
     LPC_GPIOINT -> IO0IntEnF |= 1<<24;
 
-    light_setHiThreshold(700);
-    light_setLoThreshold(50);
-    light_clearIrqStatus();
-    NVIC_ClearPendingIRQ(EINT3_IRQn);
-    NVIC_EnableIRQ(EINT3_IRQn);
-
     SysTick_Config(SystemCoreClock/1000);
 
-    volatile static int i = 0 ;
     while (1)
     {
-    	systick_delay(1000);
-    	led7seg_setChar((ledArray[i%16]), FALSE);
-    	i++;
+    	int programMode = (GPIO_Readvalue(1)>>31) & 0x01;
+		printf("Current program mode is %d\n", programMode);
 
-
-
-    	/*
+		if (programMode == true)
+		{
+			printf("activated\n");
+		}
+		/*
     	switch (mode) {
 				case CARETAKER:
-					printf("Caretaker\n");
+					printf("Entering CARETAKER mode\r\n");
 					caretaker();
 					break;
 
 				case MONITOR:
-					printf("Monitor\n")
+
+					printf("Monitor\n");
+					sevenSegmentOut();
 					break;
 
-				default:
-					printf("Not defined yet\n");
-					break;
 			}
 			*/
 
@@ -273,7 +297,9 @@ int main (void) {
 
 
 
-    	/*acc_read(&x,&y,&z);
+    	/*
+    	light_clearIrqStatus();
+    	acc_read(&x,&y,&z);
     	lightvalue = light_read();
         my_temp_value = temp_read();
         printf("%2.2f degrees \n", my_temp_value/10.0);
@@ -299,13 +325,6 @@ int main (void) {
 
         sprintf(display_acc, "MONITOR");
         oled_putString(5,5,display_acc,OLED_COLOR_WHITE, OLED_COLOR_BLACK);*/
-
-
-
-
-
-
-
 
 
 void check_failed(uint8_t *file, uint32_t line)
