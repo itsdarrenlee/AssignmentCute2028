@@ -167,10 +167,15 @@ void init_uart(void){
  ****************/
 void extInteruptInit(void)
 {
+	NVIC_SetPriorityGrouping(5);
+	
+	NVIC_SetPriority(
+	
 	NVIC_ClearPendingIRQ(EINT3_IRQn);
 	NVIC_EnableIRQ(EINT3_IRQn);
 
 	LPC_SC->EXTINT = 1;  /* Clear Interrupt Flag */
+	NVIC_SetPriority(
 	NVIC_ClearPendingIRQ(EINT0_IRQn);
 	NVIC_EnableIRQ(EINT0_IRQn);
 
