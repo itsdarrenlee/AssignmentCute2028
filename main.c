@@ -1,8 +1,8 @@
 /*****************************************************************************
- *   A demo example using several of the peripherals on the base board
  *
- *   Copyright(C) 2011, EE2024
- *   All rights reserved.
+ *
+ *   Final Project EE2028 - Lee Weihan Darren/Darren Lee Ting Jue
+ *
  *
  ******************************************************************************/
 
@@ -44,7 +44,10 @@ uint32_t getTicks(void)
 	return msTicks;
 }
 
-/***** Creates a sysTick Delay *****/
+/****************
+ *	SysTick Delay
+ ****************/
+
 __INLINE static void systick_delay (uint32_t delayTicks) {
   uint32_t currentTicks;
 
@@ -167,16 +170,15 @@ void init_uart(void){
  ****************/
 void extInteruptInit(void)
 {
-	NVIC_SetPriorityGrouping(5);
-	
-	NVIC_SetPriority(
+	NVIC_SetPriority(SysTick_IRQn,1);
 	
 	NVIC_ClearPendingIRQ(EINT3_IRQn);
+	NVIC_SetPriority(EINT3_IRQn,2);
 	NVIC_EnableIRQ(EINT3_IRQn);
 
 	LPC_SC->EXTINT = 1;  /* Clear Interrupt Flag */
-	NVIC_SetPriority(
 	NVIC_ClearPendingIRQ(EINT0_IRQn);
+	NVIC_SetPriority(EINT1_IRQn,3);
 	NVIC_EnableIRQ(EINT0_IRQn);
 
 	//https://www.exploreembedded.com/wiki/LPC1768:_External_Interrupts
@@ -187,31 +189,12 @@ void EINT3_IRQHandler(void)
 	if ((LPC_GPIOINT -> IO2IntStatF>>10) & 0x01)
 	{
 		printf("Sw3 is on interrupt \n");
-		LPC_GPIOINT -> IO2IntClr |=  1 << 10;
 	}
-
-
-	/*if ((LPC_GPIOINT -> IO2IntStatF>>10) & 0x01)
-	{
-		printf("Sw3 is on interrupt \n");
-		LPC_GPIOINT -> IO2IntClr |=  1 << 10;
-	}
-	else if (light_getIrqStatus())
-	{
-		printf("Light is on interrupt \n");
-		light_clearIrqStatus();
-		LPC_GPIOINT -> IO2IntClr |=  1 << 5;
-	}
-	else if ((LPC_GPIOINT -> IO0IntStatF>>24) & 0x01)
-	{
-		printf("Rotary is on interrupt \n");
-		LPC_GPIOINT -> IO0IntClr |=  1 << 24;
-	}*/
+	LPC_GPIOINT -> IO2IntClr |=  1 << 10;
 }
 
 void EINT0_IRQHandler(void)
 {
-
 	LPC_SC->EXTINT = (1<<0);  /* Clear Interrupt Flag */
 }
 
@@ -229,10 +212,14 @@ void init(void)
 
 	light_setHiThreshold(700);
 	light_setLoThreshold(50);
+
+	NVIC_SetPriorityGrouping(5); // IRR width for lpc1769 is 5 bits
 }
 
-void caretaker(void)
+void caretakerMode(void)
 {
+	uint8_t line[] = "Entering CARETAKER mode\r\n";
+	UART_SendString(LPC_UART3, line);
 	led7seg_setChar('{', FALSE); // clear 7 segment display
 	oled_clearScreen(OLED_COLOR_BLACK); // clear OLED display
 	GPIO_ClearValue( 0, (1<<26) ); // clear blue LED
@@ -240,9 +227,9 @@ void caretaker(void)
 	light_shutdown(); // shutdown light sensor
 }
 
-void uartSendMessage(uint8_t msg)
+void monitorMode(void)
 {
-	UART_Send(LPC_UART3, (uint8_t *)msg , strlen(msg), BLOCKING);
+	sevenSegmentOut();
 }
 
 void sevenSegmentOut(void)
@@ -254,82 +241,39 @@ void sevenSegmentOut(void)
 }
 
 
-
-int main (void) {
-
+int main (void)
+{
 	init();
-	static char* msg = NULL;
+	SysTick_Config(SystemCoreClock/1000);
+	caretakerMode();
 
-    LPC_GPIOINT -> IO2IntEnF |= 1<<10;
-    LPC_GPIOINT -> IO2IntEnF |= 1<<5;
-    LPC_GPIOINT -> IO0IntEnF |= 1<<24;
-
-    SysTick_Config(SystemCoreClock/1000);
+	bool monitorFlag = 1;
+	bool mode;
 
     while (1)
     {
-    	int programMode = (GPIO_Readvalue(1)>>31) & 0x01;
-		printf("Current program mode is %d\n", programMode);
+    	int SW_MONITOR = (GPIO_ReadValue(1) >> 31) & 0x01; // polling sw4
 
-		if (programMode == true)
-		{
-			printf("activated\n");
-		}
-		/*
+    	if (SW_MONITOR == 0)
+    	monitorFlag = 0;
+
+    	if (monitorFlag == 0)
+    	mode = 0;
+    	else
+    	mode = 1;
+
+
     	switch (mode) {
-				case CARETAKER:
-					printf("Entering CARETAKER mode\r\n");
-					caretaker();
-					break;
+			case 1:
+				caretakerMode(); // start caretaker mode
+				break;
 
-				case MONITOR:
-
-					printf("Monitor\n");
-					sevenSegmentOut();
-					break;
-
-			}
-			*/
-
+			case 0:
+				monitorMode(); // start monitor mode
+				break;
+		}
     }
 }
-
-
-
-
-
-
-
-
-
-    	/*
-    	light_clearIrqStatus();
-    	acc_read(&x,&y,&z);
-    	lightvalue = light_read();
-        my_temp_value = temp_read();
-        printf("%2.2f degrees \n", my_temp_value/10.0);
-        printf("%d lux \n", lightvalue);
-        printf("x=%d, y=%d, z=%d \n", x,y,z);
-        if (lightvalue < 200)
-        {
-        	pca9532_setLeds(0x0000, 0xFFFF);
-        }
-        else if ((lightvalue > 200) && (lightvalue < 300))
-        {
-        	pca9532_setLeds(0xFF00, 0xFFFF);
-        }
-        else if ((lightvalue > 300) && (lightvalue < 400))
-        {
-        	pca9532_setLeds(0xFFF0, 0xFFFF);
-        }
-        else
-        {
-        	pca9532_setLeds(0xFFFF, 0xFFFF);
-        }
-
-
-        sprintf(display_acc, "MONITOR");
-        oled_putString(5,5,display_acc,OLED_COLOR_WHITE, OLED_COLOR_BLACK);*/
 
 
 void check_failed(uint8_t *file, uint32_t line)
