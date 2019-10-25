@@ -209,6 +209,7 @@ void init(void)
 	led7seg_init ();
 	rgb_init ();
 	light_init();
+	light_enable();
 	temp_init(getTicks);
 	init_uart();
 
@@ -216,10 +217,7 @@ void init(void)
 	light_setLoThreshold(50);
 
 	acc_init();
-	int8_t x ;
-	int8_t y ;
-	int8_t z ;
-	acc_read(&x, &y, &z);
+
 
 	NVIC_SetPriorityGrouping(5); // IRR width for lpc1769 is 5 bits
 }
@@ -237,7 +235,6 @@ void caretakerMode(int caretakerFlag)
 	oled_clearScreen(OLED_COLOR_BLACK); // clear OLED display
 	GPIO_ClearValue( 0, (1<<26) ); // clear blue LED
 	GPIO_ClearValue( 2, (1<<0) ); // clear red LED
-	light_shutdown(); // shutdown light sensor
 }
 
 void sevenSegmentOut(int delayTime)
@@ -247,8 +244,44 @@ void sevenSegmentOut(int delayTime)
 	systick_delay(delayTime);
 	i++;
 }
-
+/** initialization for the monitor functions **/
 int monitorFlag = true;
+unsigned char monitorOled[] = "MONITOR";
+
+unsigned char floatArray[40] = {};
+uint32_t currentTemp = 0;
+
+unsigned char integerArray[40] = {};
+uint32_t currentLight = 0;
+
+int8_t x = 0;
+int8_t y = 0;
+int8_t z = 0;
+/*************************************************/
+
+void oledDisplay(void)
+{
+	oled_putString (10, 10, monitorOled, OLED_COLOR_WHITE, OLED_COLOR_BLACK);
+
+	currentTemp = temp_read();
+	snprintf (floatArray, sizeof(floatArray), "Temp: %2.2f degC", (double)currentTemp/10);
+	oled_putString (5, 20, floatArray, OLED_COLOR_WHITE, OLED_COLOR_BLACK);
+
+	currentLight = light_read();
+	snprintf (integerArray, sizeof(integerArray), "light: %d lux", (int)currentLight);
+	oled_putString (5, 30, integerArray, OLED_COLOR_WHITE, OLED_COLOR_BLACK);
+
+	acc_read(&x, &y, &z);
+	snprintf (integerArray, sizeof(integerArray), "X:%d, Y:%d", x, y);
+	oled_putString (5, 40, integerArray, OLED_COLOR_WHITE, OLED_COLOR_BLACK);
+
+	snprintf (integerArray, sizeof(integerArray), "Z:%d", z);
+	oled_putString (5, 50, integerArray, OLED_COLOR_WHITE, OLED_COLOR_BLACK);
+
+	return;
+}
+
+
 void monitorMode(int monitorFlag)
 {
 	if (monitorFlag == true)
@@ -256,6 +289,8 @@ void monitorMode(int monitorFlag)
 		unsigned char monitorMsg[] = "Entering MONITOR mode\r\n";
 		UART_SendString(LPC_UART3, monitorMsg);
 	}
+
+	oledDisplay();
 	sevenSegmentOut(1000);
 }
 
@@ -266,6 +301,8 @@ int main (void)
 
 	bool monitorStatus = false; // default mode is caretaker mode (false)
 	bool mode; // mode is a variable in main, will be executed once
+
+	oled_clearScreen(OLED_COLOR_BLACK);
 
     while (1)
     {
@@ -283,12 +320,12 @@ int main (void)
     	switch (mode) {
 			case 1:
 				caretakerMode(caretakerFlag); // start caretaker mode
-				caretakerFlag = false;
+				caretakerFlag = false; // after sending first 'entering caretaker mode', stop sending
 				break;
 
 			case 0:
 				monitorMode(monitorFlag); // start monitor mode
-				monitorFlag = false;
+				monitorFlag = false; // after sending first 'entering monitor mode', stop sending
 				break;
 		}
 
