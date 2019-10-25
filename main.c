@@ -188,13 +188,14 @@ void EINT3_IRQHandler(void)
 {
 	if ((LPC_GPIOINT -> IO2IntStatF>>10) & 0x01)
 	{
-		printf("Sw3 is on interrupt \n");
+		// raise some flag or store some data in buffer
 		LPC_GPIOINT -> IO2IntClr |=  1 << 10;
 	}
 }
 
 void EINT0_IRQHandler(void)
 {
+	// using eint0 instead of gpio for interupt
 	LPC_SC->EXTINT = (1<<0);  /* Clear Interrupt Flag */
 }
 
@@ -225,7 +226,6 @@ void init(void)
 
 void caretakerMode(void)
 {
-
 	led7seg_setChar('}', FALSE); // clear 7 segment display
 	oled_clearScreen(OLED_COLOR_BLACK); // clear OLED display
 	GPIO_ClearValue( 0, (1<<26) ); // clear blue LED
@@ -251,7 +251,7 @@ int voidMessageSendOnce(char * desiredString, int stopFlag)
 	if (stopFlag == true)
 	UART_SendString(LPC_UART3, desiredString);
 	else
-	return;
+	return false;
 }
 
 int stopFlag = 0;
