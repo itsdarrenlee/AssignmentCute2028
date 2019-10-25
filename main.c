@@ -52,7 +52,7 @@ __INLINE static void systick_delay (uint32_t delayTicks) {
   uint32_t currentTicks;
 
   currentTicks = msTicks;
-  while ((msTicks - currentTicks) < delayTicks);
+  while ((msTicks - currentTicks) <= delayTicks);
 }
 
 /****************
@@ -200,6 +200,14 @@ void EINT0_IRQHandler(void)
 
 void init(void)
 {
+	SysTick_Config(SystemCoreClock/1000);
+
+	acc_init();
+	int8_t x ;
+	int8_t y ;
+	int8_t z ;
+	acc_read(&x, &y, &z);
+
 	init_i2c();
 	init_ssp();
 	init_GPIO();
@@ -208,6 +216,7 @@ void init(void)
 	led7seg_init ();
 	rgb_init ();
 	light_init();
+	temp_init(getTicks);
 	init_uart();
 
 	light_setHiThreshold(700);
@@ -220,35 +229,40 @@ void caretakerMode(void)
 {
 	uint8_t line[] = "Entering CARETAKER mode\r\n";
 	UART_SendString(LPC_UART3, line);
-	led7seg_setChar('{', FALSE); // clear 7 segment display
+	led7seg_setChar('=', FALSE); // clear 7 segment display
 	oled_clearScreen(OLED_COLOR_BLACK); // clear OLED display
 	GPIO_ClearValue( 0, (1<<26) ); // clear blue LED
 	GPIO_ClearValue( 2, (1<<0) ); // clear red LED
 	light_shutdown(); // shutdown light sensor
 }
 
-void monitorMode(void)
-{
-	sevenSegmentOut();
-}
-
-void sevenSegmentOut(void)
+void sevenSegmentOut(int delayTime)
 {
 	volatile static int i = 0 ;
 	led7seg_setChar((ledArray[i%16]), FALSE);
-	systick_delay(1000);
+	systick_delay(delayTime);
 	i++;
 }
 
+void printOledString(unsigned char * desiredString)
+{
+	oled_clearScreen(OLED_COLOR_BLACK); // clear OLED display
+	oled_putString (10, 10, desiredString, OLED_COLOR_WHITE, OLED_COLOR_BLACK);
+}
+
+void monitorMode(void)
+{
+	char arr[20] = "abc";
+	printOledString(arr);
+	sevenSegmentOut(1000);
+}
 
 int main (void)
 {
 	init();
-	SysTick_Config(SystemCoreClock/1000);
-	caretakerMode();
 
 	bool monitorFlag = 1;
-	bool mode;
+	int mode;
 
     while (1)
     {
