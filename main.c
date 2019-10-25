@@ -51,8 +51,8 @@ uint32_t getTicks(void)
 __INLINE static void systick_delay (uint32_t delayTicks) {
   uint32_t currentTicks;
 
-  currentTicks = msTicks;
-  while ((msTicks - currentTicks) <= delayTicks);
+  currentTicks = getTicks();
+  while ((msTicks - currentTicks) < delayTicks);
 }
 
 /****************
@@ -171,7 +171,7 @@ void init_uart(void){
 void extInteruptInit(void)
 {
 	NVIC_SetPriority(SysTick_IRQn,1);
-	
+
 	NVIC_ClearPendingIRQ(EINT3_IRQn);
 	NVIC_SetPriority(EINT3_IRQn,2);
 	NVIC_EnableIRQ(EINT3_IRQn);
@@ -189,8 +189,8 @@ void EINT3_IRQHandler(void)
 	if ((LPC_GPIOINT -> IO2IntStatF>>10) & 0x01)
 	{
 		printf("Sw3 is on interrupt \n");
+		LPC_GPIOINT -> IO2IntClr |=  1 << 10;
 	}
-	LPC_GPIOINT -> IO2IntClr |=  1 << 10;
 }
 
 void EINT0_IRQHandler(void)
@@ -200,14 +200,6 @@ void EINT0_IRQHandler(void)
 
 void init(void)
 {
-	SysTick_Config(SystemCoreClock/1000);
-
-	acc_init();
-	int8_t x ;
-	int8_t y ;
-	int8_t z ;
-	acc_read(&x, &y, &z);
-
 	init_i2c();
 	init_ssp();
 	init_GPIO();
@@ -222,14 +214,19 @@ void init(void)
 	light_setHiThreshold(700);
 	light_setLoThreshold(50);
 
+	acc_init();
+	int8_t x ;
+	int8_t y ;
+	int8_t z ;
+	acc_read(&x, &y, &z);
+
 	NVIC_SetPriorityGrouping(5); // IRR width for lpc1769 is 5 bits
 }
 
 void caretakerMode(void)
 {
-	uint8_t line[] = "Entering CARETAKER mode\r\n";
-	UART_SendString(LPC_UART3, line);
-	led7seg_setChar('=', FALSE); // clear 7 segment display
+
+	led7seg_setChar('}', FALSE); // clear 7 segment display
 	oled_clearScreen(OLED_COLOR_BLACK); // clear OLED display
 	GPIO_ClearValue( 0, (1<<26) ); // clear blue LED
 	GPIO_ClearValue( 2, (1<<0) ); // clear red LED
@@ -244,25 +241,28 @@ void sevenSegmentOut(int delayTime)
 	i++;
 }
 
-void printOledString(unsigned char * desiredString)
-{
-	oled_clearScreen(OLED_COLOR_BLACK); // clear OLED display
-	oled_putString (10, 10, desiredString, OLED_COLOR_WHITE, OLED_COLOR_BLACK);
-}
-
 void monitorMode(void)
 {
-	char arr[20] = "abc";
-	printOledString(arr);
 	sevenSegmentOut(1000);
 }
+
+int voidMessageSendOnce(char * desiredString, int stopFlag)
+{
+	if (stopFlag == true)
+	UART_SendString(LPC_UART3, desiredString);
+	else
+	return;
+}
+
+int stopFlag = 0;
 
 int main (void)
 {
 	init();
+	SysTick_Config(SystemCoreClock/1000);
 
 	bool monitorFlag = 1;
-	int mode;
+	bool mode;
 
     while (1)
     {
@@ -276,9 +276,12 @@ int main (void)
     	else
     	mode = 1;
 
+    	char line[] = "Entering CARETAKER mode\r\n";
 
     	switch (mode) {
 			case 1:
+
+				stopFlag = voidMessageSendOnce(line, stopFlag);
 				caretakerMode(); // start caretaker mode
 				break;
 
@@ -286,6 +289,7 @@ int main (void)
 				monitorMode(); // start monitor mode
 				break;
 		}
+
     }
 }
 
