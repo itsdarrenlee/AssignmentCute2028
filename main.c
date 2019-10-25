@@ -224,8 +224,15 @@ void init(void)
 	NVIC_SetPriorityGrouping(5); // IRR width for lpc1769 is 5 bits
 }
 
-void caretakerMode(void)
+int caretakerFlag = true;
+void caretakerMode(int caretakerFlag)
 {
+	if (caretakerFlag == true)
+	{
+		unsigned char caretakerMsg[] = "Entering CARETAKER mode\r\n";
+		UART_SendString(LPC_UART3, caretakerMsg);
+	}
+
 	led7seg_setChar('}', FALSE); // clear 7 segment display
 	oled_clearScreen(OLED_COLOR_BLACK); // clear OLED display
 	GPIO_ClearValue( 0, (1<<26) ); // clear blue LED
@@ -241,52 +248,47 @@ void sevenSegmentOut(int delayTime)
 	i++;
 }
 
-void monitorMode(void)
+int monitorFlag = true;
+void monitorMode(int monitorFlag)
 {
+	if (monitorFlag == true)
+	{
+		unsigned char monitorMsg[] = "Entering MONITOR mode\r\n";
+		UART_SendString(LPC_UART3, monitorMsg);
+	}
 	sevenSegmentOut(1000);
 }
-
-int voidMessageSendOnce(char * desiredString, int stopFlag)
-{
-	if (stopFlag == true)
-	UART_SendString(LPC_UART3, desiredString);
-	else
-	return false;
-}
-
-int stopFlag = 0;
 
 int main (void)
 {
 	init();
 	SysTick_Config(SystemCoreClock/1000);
 
-	bool monitorFlag = 1;
-	bool mode;
+	bool monitorStatus = false; // default mode is caretaker mode (false)
+	bool mode; // mode is a variable in main, will be executed once
 
     while (1)
     {
     	int SW_MONITOR = (GPIO_ReadValue(1) >> 31) & 0x01; // polling sw4
 
-    	if (SW_MONITOR == 0)
-    	monitorFlag = 0;
+    	if (SW_MONITOR != true)
+    	monitorStatus = true; // switch is default high, so a low would indicate a press
 
-    	if (monitorFlag == 0)
-    	mode = 0;
+    	if (monitorStatus == true)
+    	mode = 0; // change to monitor mode if detect press
     	else
-    	mode = 1;
+    	mode = 1; // else remain in caretaker
 
-    	char line[] = "Entering CARETAKER mode\r\n";
 
     	switch (mode) {
 			case 1:
-
-				stopFlag = voidMessageSendOnce(line, stopFlag);
-				caretakerMode(); // start caretaker mode
+				caretakerMode(caretakerFlag); // start caretaker mode
+				caretakerFlag = false;
 				break;
 
 			case 0:
-				monitorMode(); // start monitor mode
+				monitorMode(monitorFlag); // start monitor mode
+				monitorFlag = false;
 				break;
 		}
 
