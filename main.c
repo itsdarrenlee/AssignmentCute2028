@@ -244,6 +244,7 @@ void sevenSegmentOut(int delayTime)
 	systick_delay(delayTime);
 	i++;
 }
+
 /** initialization for the monitor functions **/
 int monitorFlag = true;
 unsigned char monitorOled[] = "MONITOR";
@@ -261,21 +262,22 @@ int8_t z = 0;
 
 void oledDisplay(void)
 {
-	oled_putString (10, 10, monitorOled, OLED_COLOR_WHITE, OLED_COLOR_BLACK);
+	oled_putString (10, 10, monitorOled, OLED_COLOR_WHITE, OLED_COLOR_BLACK); // print MONITOR on oled
 
 	currentTemp = temp_read();
-	snprintf (floatArray, sizeof(floatArray), "Temp: %2.2f degC", (double)currentTemp/10);
+	snprintf (floatArray, sizeof(floatArray), "Temp: %2.2f degC", (double)currentTemp/10); // print temperature
 	oled_putString (5, 20, floatArray, OLED_COLOR_WHITE, OLED_COLOR_BLACK);
 
 	currentLight = light_read();
-	snprintf (integerArray, sizeof(integerArray), "light: %d lux", (int)currentLight);
+	snprintf (integerArray, sizeof(integerArray), "light: %d lux", (int)currentLight); // print current light in lux
 	oled_putString (5, 30, integerArray, OLED_COLOR_WHITE, OLED_COLOR_BLACK);
 
 	acc_read(&x, &y, &z);
-	snprintf (integerArray, sizeof(integerArray), "X:%d, Y:%d", x, y);
+	snprintf (integerArray, sizeof(integerArray), "X:%d, Y:%d", x, y); // print x and y accelerometer values
 	oled_putString (5, 40, integerArray, OLED_COLOR_WHITE, OLED_COLOR_BLACK);
 
-	snprintf (integerArray, sizeof(integerArray), "Z:%d", z);
+	snprintf (integerArray, sizeof(integerArray), "Z:%d", z); // print z accelerometer value on a new line
+
 	oled_putString (5, 50, integerArray, OLED_COLOR_WHITE, OLED_COLOR_BLACK);
 
 	return;
