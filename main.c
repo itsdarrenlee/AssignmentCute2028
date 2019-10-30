@@ -1,3 +1,4 @@
+
 /*****************************************************************************
  *
  *
@@ -5,7 +6,6 @@
  *
  *
  ******************************************************************************/
-
 
 #include <stdio.h>
 #include <string.h>
@@ -31,7 +31,13 @@
 #include "lpc17xx_uart.h"
 #include "uart2.h"
 
-volatile uint32_t msTicks;
+volatile uint32_t msTicks = 0;
+
+volatile uint32_t starttime = 0;
+volatile uint32_t endtime = 0;
+
+uint8_t blink_blue = 0, blink_red = 0;
+volatile bool monitorStatus = false; // default mode is caretaker mode (false)
 
 const uint8_t ledArray[] = {'0','1','2','3','4','5','6','7','8','9','A','B','C','D','E','F'};
 
@@ -51,9 +57,43 @@ uint32_t getTicks(void)
 
 __INLINE static void systick_delay (uint32_t delayTicks) {
   uint32_t currentTicks;
-
   currentTicks = getTicks();
   while ((msTicks - currentTicks) < delayTicks);
+}
+
+/****************
+ *	Time Comparator Function
+ ****************/
+uint32_t timeCompare (uint32_t ticks, uint32_t delaydiff)
+{
+	delaydiff = delaydiff * 1000;
+	return (getTicks() - ticks) >= delaydiff;
+}
+
+/****************
+ *	UART INIT
+ ****************/
+void pinsel_uart3(void){
+    PINSEL_CFG_Type PinCfg;
+    PinCfg.Funcnum = 2;
+    PinCfg.Pinnum = 0;
+    PinCfg.Portnum = 0;
+    PINSEL_ConfigPin(&PinCfg);
+    PinCfg.Pinnum = 1;
+    PINSEL_ConfigPin(&PinCfg);
+}
+void init_uart(void){
+    UART_CFG_Type uartCfg;
+    uartCfg.Baud_rate = 115200;
+    uartCfg.Databits = UART_DATABIT_8;
+    uartCfg.Parity = UART_PARITY_NONE;
+    uartCfg.Stopbits = UART_STOPBIT_1;
+    //pin select for uart3;
+    pinsel_uart3();
+    //supply power & setup working parameters for uart3
+    UART_Init(LPC_UART3, &uartCfg);
+    //enable transmit for uart3
+    UART_TxCmd(LPC_UART3, ENABLE);
 }
 
 /****************
@@ -123,85 +163,63 @@ static void init_i2c(void)
  ****************/
 static void init_GPIO(void)
 {
-	// Initialize Switch 4
+	// Initialize Switch 4 using default config
 	PINSEL_CFG_Type PinCfg;
-	PinCfg.Funcnum = 0;						//sw4
+	PinCfg.Funcnum = 0;
+	PinCfg.OpenDrain = 0;
+	PinCfg.Pinmode = 0;
 	PinCfg.Portnum = 1;
 	PinCfg.Pinnum = 31;
 	PINSEL_ConfigPin(&PinCfg);
 	GPIO_SetDir(1, 1<<31, 0);
 
-	// Initialize Switch 3
-	PinCfg.Funcnum = 0;						//sw3
+	// Initialize Switch 3 using EINT0 for port 2 pin 10
+	PinCfg.Funcnum = 1;
+	PinCfg.OpenDrain = 0;
+	PinCfg.Pinmode = 0;
 	PinCfg.Portnum = 2;
 	PinCfg.Pinnum = 10;
 	PINSEL_ConfigPin(&PinCfg);
-	GPIO_SetDir(2, 1<<10, 0);
-}
-
-/****************
- *	UART INIT
- ****************/
-void pinsel_uart3(void){
-    PINSEL_CFG_Type PinCfg;
-    PinCfg.Funcnum = 2;
-    PinCfg.Pinnum = 0;
-    PinCfg.Portnum = 0;
-    PINSEL_ConfigPin(&PinCfg);
-    PinCfg.Pinnum = 1;
-    PINSEL_ConfigPin(&PinCfg);
-}
-
-void init_uart(void){
-    UART_CFG_Type uartCfg;
-    uartCfg.Baud_rate = 115200;
-    uartCfg.Databits = UART_DATABIT_8;
-    uartCfg.Parity = UART_PARITY_NONE;
-    uartCfg.Stopbits = UART_STOPBIT_1;
-    //pin select for uart3;
-    pinsel_uart3();
-    //supply power & setup working parameters for uart3
-    UART_Init(LPC_UART3, &uartCfg);
-    //enable transmit for uart3
-    UART_TxCmd(LPC_UART3, ENABLE);
+	GPIO_SetDir(2, 1 << 10, 0);
 }
 
 /****************
  *	INTERUPT INIT
  ****************/
+
 void extInteruptInit(void)
 {
 	NVIC_SetPriority(SysTick_IRQn,1);
+	NVIC_SetPriority(EINT0_IRQn,2);
+	NVIC_SetPriority(EINT3_IRQn,3);
 
-	NVIC_ClearPendingIRQ(EINT3_IRQn);
-	NVIC_SetPriority(EINT3_IRQn,2);
-	NVIC_EnableIRQ(EINT3_IRQn);
+	NVIC_ClearPendingIRQ(EINT0_IRQn); // configure light to use eint0 interrupt
+	NVIC_ClearPendingIRQ(EINT3_IRQn); // configure sw4 to use eint3 interrupt
 
-	LPC_SC->EXTINT = 1;  /* Clear Interrupt Flag */
-	NVIC_ClearPendingIRQ(EINT0_IRQn);
-	NVIC_SetPriority(EINT1_IRQn,3);
 	NVIC_EnableIRQ(EINT0_IRQn);
-
-	//https://www.exploreembedded.com/wiki/LPC1768:_External_Interrupts
+	NVIC_EnableIRQ(EINT3_IRQn);
 }
 
 void EINT3_IRQHandler(void)
 {
-	if ((LPC_GPIOINT -> IO2IntStatF>>10) & 0x01)
-	{
-		// raise some flag or store some data in buffer
-		LPC_GPIOINT -> IO2IntClr |=  1 << 10;
-	}
+	// using EINT3 for interrupt
+
+	// action to be done for interupt e.g. raise flag
+	LPC_GPIOINT -> IO2IntClr |=  1 << 10;
 }
+
 
 void EINT0_IRQHandler(void)
 {
-	// using eint0 instead of gpio for interupt
-	LPC_SC->EXTINT = (1<<0);  /* Clear Interrupt Flag */
+	// using EINT0 for interrupt
+
+
+	LPC_SC->EXTINT = (1<<0);
 }
 
 void init(void)
 {
+	SysTick_Config(SystemCoreClock/1000);
 	init_i2c();
 	init_ssp();
 	init_GPIO();
@@ -213,14 +231,12 @@ void init(void)
 	light_enable();
 	temp_init(getTicks);
 	init_uart();
+	acc_init();
 
 	light_setHiThreshold(700);
 	light_setLoThreshold(50);
+	light_clearIrqStatus();
 
-	acc_init();
-
-
-	NVIC_SetPriorityGrouping(5); // IRR width for lpc1769 is 5 bits
 }
 
 int caretakerFlag = true;
@@ -231,18 +247,31 @@ void caretakerMode(int caretakerFlag)
 		unsigned char caretakerMsg[] = "Entering CARETAKER mode\r\n";
 		UART_SendString(LPC_UART3, caretakerMsg);
 	}
-
 	led7seg_setChar('}', FALSE); // clear 7 segment display
 	oled_clearScreen(OLED_COLOR_BLACK); // clear OLED display
+	blink_red = 0;	// Clear blink red led display
+	blink_blue = 0;	// Clear blink blue led display
 	GPIO_ClearValue( 0, (1<<26) ); // clear blue LED
 	GPIO_ClearValue( 2, (1<<0) ); // clear red LED
 }
 
-void sevenSegmentOut(int delayTime)
+bool sevenSegFlag = false;
+bool transmissionFlag = false;
+void sevenSegmentOut(void)
 {
-	volatile static int i = 0 ;
+	volatile static int i = 0;
 	led7seg_setChar((ledArray[i%16]), FALSE);
-	systick_delay(delayTime);
+	if (i%16 == 5 || i%16 == 10)
+		sevenSegFlag = true;
+	else
+		sevenSegFlag = false;
+
+	if (i%16 == 15)
+		transmissionFlag = true;
+	else
+		transmissionFlag = false;
+
+	//printf("i is %d, current trans flag %d\n", i, transmissionFlag);
 	i++;
 }
 
@@ -256,34 +285,55 @@ uint32_t currentTemp = 0;
 unsigned char integerArray[40] = {};
 uint32_t currentLight = 0;
 
+unsigned char nameMsg[64] = "";
+int msgCount = 0;
+
 int8_t x = 0;
 int8_t y = 0;
 int8_t z = 0;
+int8_t offsetx = 0;
+int8_t offsety = 0;
+int8_t offsetz = 0;
+uint32_t my_temp_value;
+uint32_t lightvalue;
 /*************************************************/
 
-void oledDisplay(void)
+void oledDisplay(bool transmissionFlag)
 {
-	oled_putString (10, 10, monitorOled, OLED_COLOR_WHITE, OLED_COLOR_BLACK); // print MONITOR on oled
-
 	currentTemp = temp_read();
-	snprintf (floatArray, sizeof(floatArray), "Temp: %2.2f degC", (double)currentTemp/10); // print temperature
-	oled_putString (5, 20, floatArray, OLED_COLOR_WHITE, OLED_COLOR_BLACK);
+	snprintf (floatArray, sizeof(floatArray), "Temp: %2.2fdegC", (double)currentTemp/10); // print temperature
+	oled_putString (1, 20, floatArray, OLED_COLOR_WHITE, OLED_COLOR_BLACK);
 
 	currentLight = light_read();
 	snprintf (integerArray, sizeof(integerArray), "light: %d lux", (int)currentLight); // print current light in lux
-	oled_putString (5, 30, integerArray, OLED_COLOR_WHITE, OLED_COLOR_BLACK);
+	oled_putString (1, 30, integerArray, OLED_COLOR_WHITE, OLED_COLOR_BLACK);
 
 	acc_read(&x, &y, &z);
 	snprintf (integerArray, sizeof(integerArray), "X:%d, Y:%d", x, y); // print x and y accelerometer values
-	oled_putString (5, 40, integerArray, OLED_COLOR_WHITE, OLED_COLOR_BLACK);
+	oled_putString (1, 40, integerArray, OLED_COLOR_WHITE, OLED_COLOR_BLACK);
 
 	snprintf (integerArray, sizeof(integerArray), "Z:%d", z); // print z accelerometer value on a new line
+	oled_putString (1, 50, integerArray, OLED_COLOR_WHITE, OLED_COLOR_BLACK);
 
-	oled_putString (5, 50, integerArray, OLED_COLOR_WHITE, OLED_COLOR_BLACK);
+	if (transmissionFlag == true)
+	{
+		snprintf (nameMsg, sizeof(nameMsg), "%03d_-_T%05.1f_L%05d_AX%05d_AY%05d_AZ%05d\r\n", msgCount, currentTemp, currentLight, x, y, z);
+		UART_SendString(LPC_UART3, nameMsg);
+		msgCount += 1;
+	}
+
+
 
 	return;
 }
 
+void SampleAccel(void)
+{
+	acc_read(&x,&y,&z);
+	x = x + offsetx;
+	y = y + offsety;
+	z = z + offsetz;
+}
 
 void monitorMode(int monitorFlag)
 {
@@ -293,19 +343,29 @@ void monitorMode(int monitorFlag)
 		UART_SendString(LPC_UART3, monitorMsg);
 	}
 
-	oledDisplay();
-	sevenSegmentOut(1000);
+	if ((currentTemp/10) >= 40)
+	{
+		blink_red = 1;
+		unsigned char FireMsg[] = "Fire Detected\r\n";
+		UART_SendString(LPC_UART3, FireMsg);
+	}
+	if (((currentLight) < 50) && (sqrt(x*x+y*y+z*z) >= 100))
+	{
+		blink_blue = 1; 		//raise blink blue flag when light intensity is low and movement is detected
+		unsigned char DarkMovementMsg[] = "Movement in Darkness Detected\r\n";
+		UART_SendString(LPC_UART3, DarkMovementMsg);
+	}
 }
 
 int main (void)
 {
 	init();
-	SysTick_Config(SystemCoreClock/1000);
-
-	bool monitorStatus = false; // default mode is caretaker mode (false)
-	bool mode; // mode is a variable in main, will be executed once
+	extInteruptInit();
 
 	oled_clearScreen(OLED_COLOR_BLACK);
+
+	bool mode; // mode is a variable in main, will be executed once
+	int sevenSegTicks = getTicks();
 
     while (1)
     {
@@ -322,15 +382,51 @@ int main (void)
 
     	switch (mode) {
 			case 1:
+
 				caretakerMode(caretakerFlag); // start caretaker mode
 				caretakerFlag = false; // after sending first 'entering caretaker mode', stop sending
 				break;
 
 			case 0:
+
 				monitorMode(monitorFlag); // start monitor mode
+				if (timeCompare(sevenSegTicks, 1))
+				{
+					sevenSegTicks = getTicks();
+					sevenSegmentOut();
+				}
+
+				oled_putString (1, 10, monitorOled, OLED_COLOR_WHITE, OLED_COLOR_BLACK); // print MONITOR on oled
+				if (sevenSegFlag == true)
+				oledDisplay(transmissionFlag);
+
 				monitorFlag = false; // after sending first 'entering monitor mode', stop sending
 				break;
 		}
+
+
+    	if (blink_red == 1 && blink_blue == 1)
+    	{
+			GPIO_ClearValue( 0, (1<<26)); // Clear blue
+			GPIO_SetValue( 2, (1<<0)); // Red first
+			systick_delay (500);
+			GPIO_ClearValue( 2,(1<<0)); // Clear red
+			GPIO_SetValue( 0, (1<<26)); // Set blue
+    	}
+
+    	else if (blink_blue == 1)  // Blink BLUE for movement in the dark.
+    	{
+			GPIO_SetValue( 0, (1<<26));	//set blue
+			systick_delay (500);
+			GPIO_ClearValue( 0, (1<<26));
+    	}
+
+    	else if (blink_red == 1)  // Blink RED for fire.
+    	{
+			 GPIO_SetValue( 2, (1<<0));	//set red
+			 systick_delay (500);
+			 GPIO_ClearValue( 2,(1<<0));	//clear red
+    	}
 
     }
 }
