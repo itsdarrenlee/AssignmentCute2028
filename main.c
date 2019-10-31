@@ -31,10 +31,11 @@
 #include "lpc17xx_uart.h"
 #include "uart2.h"
 
-volatile uint32_t msTicks = 0;
+#define TEMP_HIGH_WARNING 32.1
+#define LIGHT_LOW_WARNING 50
+#define ACCEL_LIMIT 10
 
-volatile uint32_t starttime = 0;
-volatile uint32_t endtime = 0;
+volatile uint32_t msTicks = 0;
 
 uint8_t blink_blue = 0, blink_red = 0;
 volatile bool monitorStatus = false; // default mode is caretaker mode (false)
@@ -267,19 +268,10 @@ void caretakerMode(int caretakerFlag)
 	GPIO_ClearValue( 2, (1<<0) ); // clear red LED
 }
 
-
-//bool sevenSegFlag = false;
-
 void sevenSegmentOut(int charCounter)
 {
 	led7seg_setChar((ledArray[charCounter%16]), FALSE);
 	charCounter++;
-
-	/*
-	if (charCounter%16 == 5 || charCounter%16 == 10)
-		sevenSegFlag = true;
-	else
-		sevenSegFlag = false;*/
 }
 
 /** initialization for the monitor functions **/
@@ -298,30 +290,24 @@ int msgCount = 0;
 /*************************************************/
 void sampleEnv(void)
 {
-	currentTemp = temp_read();
+	currentTemp = temp_read()/10;
 	currentLight = light_read();
 
 	acc_read(&x, &y, &z);
 	x = x+xoff;
 	y = y+yoff;
 	z = z+zoff;
-
-	//printf("light is %d, temp is %f, x is %d, y is %d, z is %d\n", currentLight, currentTemp, x, y, z);
-
 }
+
 void oledDisplay(void)
 {
 	sampleEnv();
-
-	printf("current temp is %f\n", currentTemp/10);
-	snprintf (floatArray, sizeof(floatArray), "Temp: %2.2fdegC", (double)currentTemp/10); // print temperature
+	snprintf (floatArray, sizeof(floatArray), "Temp: %2.2fdegC", (double)currentTemp); // print temperature
 	oled_putString (1, 20, floatArray, OLED_COLOR_WHITE, OLED_COLOR_BLACK);
 
-	printf("current lux is %d\n", currentLight);
 	snprintf (integerArray, sizeof(integerArray), "light: %d lux", (int)currentLight); // print current light in lux
 	oled_putString (1, 30, integerArray, OLED_COLOR_WHITE, OLED_COLOR_BLACK);
 
-	printf("current xyz is %d, %d, %d\n",x,y,z);
 	snprintf (integerArray, sizeof(integerArray), "X:%d, Y:%d", x, y); // print x and y accelerometer values
 	oled_putString (1, 40, integerArray, OLED_COLOR_WHITE, OLED_COLOR_BLACK);
 
@@ -347,13 +333,14 @@ void monitorMode(int monitorFlag)
 		UART_SendString(LPC_UART3, monitorMsg);
 	}
 
-	if ((currentTemp/10) >= 40)
+	sampleEnv();
+	if ((currentTemp) >= TEMP_HIGH_WARNING)
 	{
 		blink_red = 1;
 		unsigned char FireMsg[] = "Fire Detected\r\n";
 		UART_SendString(LPC_UART3, FireMsg);
 	}
-	if (((currentLight) < 50) && (sqrt(x*x+y*y+z*z) >= 100))
+	if (((currentLight) < LIGHT_LOW_WARNING) && (sqrt(x*x+y*y+z*z) >= 100))
 	{
 		blink_blue = 1; 		//raise blink blue flag when light intensity is low and movement is detected
 		unsigned char DarkMovementMsg[] = "Movement in Darkness Detected\r\n";
@@ -366,7 +353,7 @@ int main (void)
 	init();
 	extInteruptInit();
 	volatile static int charCounter = 0;
-	bool printFlag = false;
+	bool oledFlag, sendFlag = false;
 
 	oled_clearScreen(OLED_COLOR_BLACK);
 
@@ -396,24 +383,25 @@ int main (void)
 				monitorMode(monitorFlag); // start monitor mode
 				oled_putString (1, 10, monitorOled, OLED_COLOR_WHITE, OLED_COLOR_BLACK); // print MONITOR on oled
 
-				if (charCounter%16 == 5 || charCounter%16 == 10)
-					oledDisplay();
-
-				if (charCounter%16 == 15 && printFlag == false)
+				if ((charCounter%16 == 6 || charCounter%16 == 11 || charCounter%16 == 0) && oledFlag == false)
 				{
+					oledDisplay();
+					oledFlag = true;
+				}
 
+				if (charCounter%16 == 15 && sendFlag == false)
+				{
 					SendEnvVariables();
-					printFlag = true;
+					sendFlag = true;
 				}
 
 				if (timeCompare(sevenSegTicks, 1))
 				{
-					sevenSegmentOut(charCounter);
 					sevenSegTicks = getTicks();
+					sevenSegmentOut(charCounter);
 					charCounter++;
-					printFlag = false;
+					oledFlag = false; sendFlag = false;
 				}
-
 
 				monitorFlag = false; // after sending first 'entering monitor mode', stop sending
 				break;
