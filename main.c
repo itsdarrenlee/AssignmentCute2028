@@ -41,6 +41,14 @@ volatile bool monitorStatus = false; // default mode is caretaker mode (false)
 
 const uint8_t ledArray[] = {'0','1','2','3','4','5','6','7','8','9','A','B','C','D','E','F'};
 
+int32_t xoff = 0;
+int32_t yoff = 0;
+int32_t zoff = 0;
+
+int8_t x = 0;
+int8_t y = 0;
+int8_t z = 0;
+
 void SysTick_Handler(void)
 {
     msTicks++;
@@ -212,8 +220,6 @@ void EINT3_IRQHandler(void)
 void EINT0_IRQHandler(void)
 {
 	// using EINT0 for interrupt
-
-
 	LPC_SC->EXTINT = (1<<0);
 }
 
@@ -223,7 +229,13 @@ void init(void)
 	init_i2c();
 	init_ssp();
 	init_GPIO();
+
 	acc_init();
+	acc_read(&x, &y, &z);
+	xoff = 0-x;
+	yoff = 0-y;
+	zoff = 0-z;
+
 	oled_init();
 	led7seg_init ();
 	rgb_init ();
@@ -255,24 +267,19 @@ void caretakerMode(int caretakerFlag)
 	GPIO_ClearValue( 2, (1<<0) ); // clear red LED
 }
 
-bool sevenSegFlag = false;
-bool transmissionFlag = false;
-void sevenSegmentOut(void)
+
+//bool sevenSegFlag = false;
+
+void sevenSegmentOut(int charCounter)
 {
-	volatile static int i = 0;
-	led7seg_setChar((ledArray[i%16]), FALSE);
-	if (i%16 == 5 || i%16 == 10)
+	led7seg_setChar((ledArray[charCounter%16]), FALSE);
+	charCounter++;
+
+	/*
+	if (charCounter%16 == 5 || charCounter%16 == 10)
 		sevenSegFlag = true;
 	else
-		sevenSegFlag = false;
-
-	if (i%16 == 15)
-		transmissionFlag = true;
-	else
-		transmissionFlag = false;
-
-	//printf("i is %d, current trans flag %d\n", i, transmissionFlag);
-	i++;
+		sevenSegFlag = false;*/
 }
 
 /** initialization for the monitor functions **/
@@ -280,59 +287,56 @@ int monitorFlag = true;
 unsigned char monitorOled[] = "MONITOR";
 
 unsigned char floatArray[40] = {};
-uint32_t currentTemp = 0;
+float currentTemp = 0;
 
 unsigned char integerArray[40] = {};
-uint32_t currentLight = 0;
+int currentLight = 0;
 
 unsigned char nameMsg[64] = "";
 int msgCount = 0;
 
-int8_t x = 0;
-int8_t y = 0;
-int8_t z = 0;
-int8_t offsetx = 0;
-int8_t offsety = 0;
-int8_t offsetz = 0;
-uint32_t my_temp_value;
-uint32_t lightvalue;
 /*************************************************/
-
-void oledDisplay(bool transmissionFlag)
+void sampleEnv(void)
 {
 	currentTemp = temp_read();
+	currentLight = light_read();
+
+	acc_read(&x, &y, &z);
+	x = x+xoff;
+	y = y+yoff;
+	z = z+zoff;
+
+	//printf("light is %d, temp is %f, x is %d, y is %d, z is %d\n", currentLight, currentTemp, x, y, z);
+
+}
+void oledDisplay(void)
+{
+	sampleEnv();
+
+	printf("current temp is %f\n", currentTemp/10);
 	snprintf (floatArray, sizeof(floatArray), "Temp: %2.2fdegC", (double)currentTemp/10); // print temperature
 	oled_putString (1, 20, floatArray, OLED_COLOR_WHITE, OLED_COLOR_BLACK);
 
-	currentLight = light_read();
+	printf("current lux is %d\n", currentLight);
 	snprintf (integerArray, sizeof(integerArray), "light: %d lux", (int)currentLight); // print current light in lux
 	oled_putString (1, 30, integerArray, OLED_COLOR_WHITE, OLED_COLOR_BLACK);
 
-	acc_read(&x, &y, &z);
+	printf("current xyz is %d, %d, %d\n",x,y,z);
 	snprintf (integerArray, sizeof(integerArray), "X:%d, Y:%d", x, y); // print x and y accelerometer values
 	oled_putString (1, 40, integerArray, OLED_COLOR_WHITE, OLED_COLOR_BLACK);
 
 	snprintf (integerArray, sizeof(integerArray), "Z:%d", z); // print z accelerometer value on a new line
 	oled_putString (1, 50, integerArray, OLED_COLOR_WHITE, OLED_COLOR_BLACK);
 
-	if (transmissionFlag == true)
-	{
-		snprintf (nameMsg, sizeof(nameMsg), "%03d_-_T%05.1f_L%05d_AX%05d_AY%05d_AZ%05d\r\n", msgCount, currentTemp, currentLight, x, y, z);
-		UART_SendString(LPC_UART3, nameMsg);
-		msgCount += 1;
-	}
-
-
-
 	return;
 }
 
-void SampleAccel(void)
+void SendEnvVariables(void)
 {
-	acc_read(&x,&y,&z);
-	x = x + offsetx;
-	y = y + offsety;
-	z = z + offsetz;
+	sampleEnv();
+	snprintf (nameMsg, sizeof(nameMsg), "%03d_-_T%05.1f_L%05d_AX%05d_AY%05d_AZ%05d\r\n", msgCount, currentTemp, currentLight, x, y, z);
+	UART_SendString(LPC_UART3, nameMsg);
+	msgCount += 1;
 }
 
 void monitorMode(int monitorFlag)
@@ -361,6 +365,8 @@ int main (void)
 {
 	init();
 	extInteruptInit();
+	volatile static int charCounter = 0;
+	bool printFlag = false;
 
 	oled_clearScreen(OLED_COLOR_BLACK);
 
@@ -382,23 +388,32 @@ int main (void)
 
     	switch (mode) {
 			case 1:
-
 				caretakerMode(caretakerFlag); // start caretaker mode
 				caretakerFlag = false; // after sending first 'entering caretaker mode', stop sending
 				break;
 
 			case 0:
-
 				monitorMode(monitorFlag); // start monitor mode
-				if (timeCompare(sevenSegTicks, 1))
+				oled_putString (1, 10, monitorOled, OLED_COLOR_WHITE, OLED_COLOR_BLACK); // print MONITOR on oled
+
+				if (charCounter%16 == 5 || charCounter%16 == 10)
+					oledDisplay();
+
+				if (charCounter%16 == 15 && printFlag == false)
 				{
-					sevenSegTicks = getTicks();
-					sevenSegmentOut();
+
+					SendEnvVariables();
+					printFlag = true;
 				}
 
-				oled_putString (1, 10, monitorOled, OLED_COLOR_WHITE, OLED_COLOR_BLACK); // print MONITOR on oled
-				if (sevenSegFlag == true)
-				oledDisplay(transmissionFlag);
+				if (timeCompare(sevenSegTicks, 1))
+				{
+					sevenSegmentOut(charCounter);
+					sevenSegTicks = getTicks();
+					charCounter++;
+					printFlag = false;
+				}
+
 
 				monitorFlag = false; // after sending first 'entering monitor mode', stop sending
 				break;
