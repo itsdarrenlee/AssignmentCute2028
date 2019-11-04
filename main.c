@@ -184,6 +184,11 @@ static void init_GPIO(void)
     PinCfg.Pinnum = 10;
     PINSEL_ConfigPin(&PinCfg);
     GPIO_SetDir(2, 1 << 10, 0);
+
+    // Settings for EINT0 Interrupt
+	LPC_SC->EXTINT = 1;
+	LPC_SC->EXTMODE |= 1<<0;
+	LPC_SC->EXTPOLAR &= ~(1 << 0);
 }
 
 /****************
@@ -193,74 +198,65 @@ static void init_GPIO(void)
 void extInteruptInit(void)
 {
     NVIC_SetPriority(SysTick_IRQn,1);
-    //NVIC_SetPriority(EINT0_IRQn,2);
+    NVIC_SetPriority(EINT0_IRQn,2);
     NVIC_SetPriority(EINT3_IRQn,3);
 
-    //NVIC_ClearPendingIRQ(EINT0_IRQn); // configure light to use eint0 interrupt
-    NVIC_ClearPendingIRQ(EINT3_IRQn); // configure sw4 to use eint3 interrupt
+    NVIC_ClearPendingIRQ(EINT0_IRQn); // configure sw3 to use eint0 interrupt
+    NVIC_ClearPendingIRQ(EINT3_IRQn);
 
-    //NVIC_EnableIRQ(EINT0_IRQn);
+    NVIC_EnableIRQ(EINT0_IRQn);
     NVIC_EnableIRQ(EINT3_IRQn);
 }
 
-volatile int8_t instantTemp;
+volatile int8_t currentTemp;
 
 void EINT3_IRQHandler(void)
 {
-	/*
+	// using EINT3 for interrupt
 
+	/*
 	// temperature rising/falling edge
 	if (((LPC_GPIOINT ->IO0IntStatF >> 2) & 0x1) || ((LPC_GPIOINT ->IO0IntStatR >> 2) & 0x1))
 	{
-		instantTemp = ((GPIO_ReadValue(0) & (1 << 2)) != 0);
-
-		printf("instantTemp is %d\n", instantTemp);
+		currentTemp = ((GPIO_ReadValue(0) & (1 << 2)) != 0);
+		printf("in eint3, currentTemp is %d\n", currentTemp);
 
 		LPC_GPIOINT -> IO0IntClr =  1 << 2;
-	}
-	*/
-
-	// using EINT3 for interrupt
-    if (((LPC_GPIOINT -> IO2IntStatF >> 10) & 0x01))
-    {
-    	if(monitorStatus == true)       //monitor mode
-		{
-   			if(switchCounter == 0)
-			{
-				startTime = getTicks();
-				switchCounter = 1;
-				printf("1st Press, time = %d \n", startTime);
-			}
-   			else
-   			{
-				endTime = getTicks();
-				switchCounter = 2;
-				printf("2nd Press, time = %d \n", endTime);
-   			}
-
-
-			if (endTime-startTime < 1000 && switchCounter == 2)
-			{
-				printf("leaving monitor mode \n");
-				switchCounter = 0;
-				monitorStatus = false;
-
-				unsigned char caretakermodeMsg[] = "Leaving Monitor mode\r\n";
-				UART_SendString(LPC_UART3, caretakermodeMsg);
-			}
-		}
-    }
-
-    LPC_GPIOINT -> IO2IntClr |=  1 << 10;
+	}*/
 }
 
-/*
+
 void EINT0_IRQHandler(void)
 {
     // using EINT0 for interrupt
+	if(monitorStatus == true)       //monitor mode
+	{
+		if(switchCounter == 0)
+		{
+			startTime = getTicks();
+			switchCounter = 1;
+			printf("1st Press, time = %d \n", startTime);
+		}
+		else
+		{
+			endTime = getTicks();
+			switchCounter = 2;
+			printf("2nd Press, time = %d \n", endTime);
+		}
+
+		if (endTime-startTime < 1000 && switchCounter == 2)
+		{
+			printf("leaving monitor mode \n");
+			switchCounter = 0;
+			monitorStatus = false;
+
+			unsigned char caretakermodeMsg[] = "Leaving Monitor mode\r\n";
+			UART_SendString(LPC_UART3, caretakermodeMsg);
+		}
+	}
     LPC_SC->EXTINT = (1<<0);
 }
-*/
+
 
 void init(void)
 {
@@ -338,7 +334,6 @@ void sampleEnv(env *ptr)
     ptr->accelY = y;
     ptr->accelZ = z;
 
-    //printf("current temp is %f\n", ptr->currentTemp);
 }
 
 void oledDisplay(env *ptr)
@@ -398,7 +393,7 @@ void fireOrDarkness(env *ptr)
 	uint8_t y = ptr->accelY;
 	uint8_t z = ptr->accelZ;
 
-	//printf("current temp is %f\n", ptr->currentTemp);
+	printf("current temp is %f\n", ptr->currentTemp);
 	if ((ptr->currentTemp) >= TEMP_HIGH_WARNING)
 	{
 		blink_red = 1;
@@ -406,7 +401,6 @@ void fireOrDarkness(env *ptr)
 		UART_SendString(LPC_UART3, FireMsg);
 	}
 
-	//printf("current light is %d\n", ptr->currentLight);
 	if (((ptr->currentLight) < LIGHT_LOW_WARNING) && (sqrt(x*x+y*y+z*z) >= ACCEL_LIMIT))
 	{
 		blink_blue = 1;         //raise blink blue flag when light intensity is low and movement is detected
@@ -423,7 +417,9 @@ int main (void)
     init();
     extInteruptInit();
 
-    LPC_GPIOINT -> IO2IntEnF |= 1<<10;
+    //LPC_GPIOINT -> IO2IntEnF |= 1<<10;
+
+
 
     volatile static int charCounter = 0;
 
@@ -434,10 +430,13 @@ int main (void)
     env *ptr = &envValues;
 
     /*
-    LPC_GPIOINT -> IO0IntEnF |= 1<<2;
-    LPC_GPIOINT -> IO0IntEnR |= 1<<2;
-    LPC_GPIOINT -> IO0IntClr =  1 << 2;
-*/
+    GPIO_SetDir(0, (1 << 2), 0);
+    LPC_GPIOINT -> IO0IntEnF |= 1<<2; // if temp falls
+    LPC_GPIOINT -> IO0IntEnR |= 1<<2; // if temp rises
+    LPC_GPIOINT -> IO0IntClr =  1<<2; // clear the interrupt
+    currentTemp = ((GPIO_ReadValue(0) & (1 << 2)) != 0); // update current temp
+    printf("in main, current temp is %d\n", currentTemp);
+	*/
 
     oled_clearScreen(OLED_COLOR_BLACK);
 
@@ -532,13 +531,10 @@ int main (void)
 					}
 				}
 
-
 				caretakerFlag = true;
                 monitorFlag = false; // after sending first 'entering monitor mode', stop sending
                 break;
         }
-
-
     }
 }
 
