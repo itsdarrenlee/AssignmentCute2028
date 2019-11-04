@@ -193,19 +193,34 @@ static void init_GPIO(void)
 void extInteruptInit(void)
 {
     NVIC_SetPriority(SysTick_IRQn,1);
-    NVIC_SetPriority(EINT0_IRQn,2);
+    //NVIC_SetPriority(EINT0_IRQn,2);
     NVIC_SetPriority(EINT3_IRQn,3);
 
-    NVIC_ClearPendingIRQ(EINT0_IRQn); // configure light to use eint0 interrupt
+    //NVIC_ClearPendingIRQ(EINT0_IRQn); // configure light to use eint0 interrupt
     NVIC_ClearPendingIRQ(EINT3_IRQn); // configure sw4 to use eint3 interrupt
 
-    NVIC_EnableIRQ(EINT0_IRQn);
+    //NVIC_EnableIRQ(EINT0_IRQn);
     NVIC_EnableIRQ(EINT3_IRQn);
 }
 
+volatile int8_t instantTemp;
+
 void EINT3_IRQHandler(void)
 {
-    // using EINT3 for interrupt
+	/*
+
+	// temperature rising/falling edge
+	if (((LPC_GPIOINT ->IO0IntStatF >> 2) & 0x1) || ((LPC_GPIOINT ->IO0IntStatR >> 2) & 0x1))
+	{
+		instantTemp = ((GPIO_ReadValue(0) & (1 << 2)) != 0);
+
+		printf("instantTemp is %d\n", instantTemp);
+
+		LPC_GPIOINT -> IO0IntClr =  1 << 2;
+	}
+	*/
+
+	// using EINT3 for interrupt
     if (((LPC_GPIOINT -> IO2IntStatF >> 10) & 0x01))
     {
     	if(monitorStatus == true)       //monitor mode
@@ -233,19 +248,19 @@ void EINT3_IRQHandler(void)
 				unsigned char caretakermodeMsg[] = "Leaving Monitor mode\r\n";
 				UART_SendString(LPC_UART3, caretakermodeMsg);
 			}
-
 		}
     }
 
     LPC_GPIOINT -> IO2IntClr |=  1 << 10;
 }
 
-
+/*
 void EINT0_IRQHandler(void)
 {
     // using EINT0 for interrupt
     LPC_SC->EXTINT = (1<<0);
 }
+*/
 
 void init(void)
 {
@@ -260,9 +275,8 @@ void init(void)
     yoff = 0-y;
     zoff = 0-z;
 
-    printf("x is %d, y is %d, z is %d\n",x,y,z);
-    printf("xoff is %d, yoff is %d, zoff is %d\n",xoff,yoff,zoff);
-
+    //printf("x is %d, y is %d, z is %d\n",x,y,z);
+    //printf("xoff is %d, yoff is %d, zoff is %d\n",xoff,yoff,zoff);
 
     oled_init();
     led7seg_init ();
@@ -280,7 +294,7 @@ void init(void)
 
 void caretakerMode(int caretakerFlag)
 {
-    if (caretakerFlag == true) // default true
+	if (caretakerFlag == true) // default true
     {
         unsigned char caretakerMsg[] = "Entering CARETAKER mode\r\n";
         UART_SendString(LPC_UART3, caretakerMsg);
@@ -296,7 +310,6 @@ void caretakerMode(int caretakerFlag)
 void sevenSegmentOut(int charCounter)
 {
     led7seg_setChar((ledArray[charCounter%16]), FALSE);
-    charCounter++;
 }
 
 /** initialization for the monitor functions **/
@@ -325,7 +338,7 @@ void sampleEnv(env *ptr)
     ptr->accelY = y;
     ptr->accelZ = z;
 
-    printf("current temp is %f\n", ptr->currentTemp);
+    //printf("current temp is %f\n", ptr->currentTemp);
 }
 
 void oledDisplay(env *ptr)
@@ -362,7 +375,21 @@ void monitorMode(int monitorFlag, env *ptr)
         unsigned char monitorMsg[] = "Entering MONITOR mode\r\n";
         UART_SendString(LPC_UART3, monitorMsg);
     }
+
 	oled_putString (1, 10, monitorOled, OLED_COLOR_WHITE, OLED_COLOR_BLACK); // print MONITOR on oled
+}
+
+void displayOnOled(env *ptr, bool oledFlag, int charCounter)
+{
+	if ((charCounter%16 == 6
+	|| charCounter%16 == 11
+	|| charCounter%16 == 0)
+	&& charCounter != 0
+	&& oledFlag == false)
+	{
+		oledDisplay(ptr);
+		oledFlag = true;
+	}
 }
 
 void fireOrDarkness(env *ptr)
@@ -388,30 +415,34 @@ void fireOrDarkness(env *ptr)
 	}
 }
 
+bool mode, oledFlag, sendFlag;
+bool caretakerFlag = true;
+
 int main (void)
 {
     init();
     extInteruptInit();
 
+    LPC_GPIOINT -> IO2IntEnF |= 1<<10;
+
     volatile static int charCounter = 0;
 
-    bool mode, oledFlag, sendFlag;
-    bool caretakerFlag = true;
     int sevenSegTicks = getTicks();
     int rgbBothTicks = getTicks();
 
     env envValues;
     env *ptr = &envValues;
 
-    LPC_GPIOINT -> IO2IntEnF |= 1<<10;
+    /*
+    LPC_GPIOINT -> IO0IntEnF |= 1<<2;
+    LPC_GPIOINT -> IO0IntEnR |= 1<<2;
+    LPC_GPIOINT -> IO0IntClr =  1 << 2;
+*/
 
     oled_clearScreen(OLED_COLOR_BLACK);
 
     while (1)
     {
-		float k = temp_read();
-		printf("temp is %f\n", k);
-
 		int SW_MONITOR = (GPIO_ReadValue(1) >> 31) & 0x01; // polling sw4
 
         if (SW_MONITOR != true)
@@ -430,8 +461,12 @@ int main (void)
 
         switch (mode) {
             case 1:
+
                 caretakerMode(caretakerFlag); // start caretaker mode
                 caretakerFlag = false; // after sending first 'entering caretaker mode', stop sending
+
+                monitorFlag = true;
+                charCounter = 0;
 
                 break;
 
@@ -439,41 +474,32 @@ int main (void)
                 monitorMode(monitorFlag, ptr); // start monitor mode
                 fireOrDarkness(ptr);
                 sampleEnv(ptr);
+                displayOnOled(ptr, oledFlag, charCounter);
 
-                //printf("x is %d, y is %d, z is %d, accel x is %d, accel y is %d, accel z is %d\n",x,y,z,ptr->accelX,ptr->accelY,ptr->accelZ);;
-
-                if ((charCounter%16 == 6
-                       || charCounter%16 == 11
-                        || charCounter%16 == 0)
-                        && charCounter != 0
-                        && oledFlag == false)
-                {
-                    oledDisplay(ptr);
-                    oledFlag = true;
-                }
 
                 if (charCounter%16 == 15 && sendFlag == false)
-                {
-                    SendEnvVariables(ptr);
-                    sendFlag = true;
-                }
+				{
+					SendEnvVariables(ptr);
+					sendFlag = true;
+				}
 
                 if (timeCompare(sevenSegTicks, 1))
-                {
-                    sevenSegTicks = getTicks();
-                    sevenSegmentOut(charCounter);
-                    charCounter++;
-                    oledFlag = false; sendFlag = false;
-                }
+				{
+					sevenSegTicks = getTicks();
+					sevenSegmentOut(charCounter++);
 
-				if (blink_red == 1 && blink_blue == 1)
+					oledFlag = false; sendFlag = false;
+				}
+
+
+                if (blink_red == 1 && blink_blue == 1)
 				{
 					if (timeCompare(rgbBothTicks, 0.5) )
 					{
 						GPIO_ClearValue( 0, (1<<26)); // Clear blue
 						GPIO_SetValue( 2, (1<<0)); // Red first
 					}
-					if (timeCompare(rgbBothTicks, 1))
+					if (timeCompare(rgbBothTicks, 1) )
 					{
 
 						GPIO_ClearValue( 2,(1<<0)); // Clear red
@@ -485,38 +511,29 @@ int main (void)
 				else if (blink_red == 1 && blink_blue == 0)
 				{
 					GPIO_ClearValue( 0, (1<<26)); // Clear blue
-					if (timeCompare(rgbBothTicks, 0.5) )
-					{
-					   GPIO_SetValue( 2, (1<<0)); // set red
-					}
+					GPIO_SetValue( 2, (1<<0)); // set red
+
 					if (timeCompare(rgbBothTicks, 1))
 					{
-					   GPIO_ClearValue( 2,(1<<0)); //Clear red
-					   rgbBothTicks = getTicks();
+						GPIO_ClearValue( 2,(1<<0)); //Clear red
+						rgbBothTicks = getTicks();
 					}
 				}
 
 				else if (blink_blue == 1 && blink_red == 0)
 				{
 					GPIO_ClearValue( 2, (1<<0)); // clear red
-					if (timeCompare(rgbBothTicks, 0.5) )
-					{
-					   GPIO_SetValue( 0, (1<<26)); // set blue
-					}
+					GPIO_SetValue( 0, (1<<26)); // set blue
 
-					if (timeCompare(rgbBothTicks, 1) )
+					if (timeCompare(rgbBothTicks, 1))
 					{
 					   GPIO_ClearValue( 0,(1<<26)); //clear blue
 					   rgbBothTicks = getTicks();
 					}
 				}
-				else
-				{
-					GPIO_ClearValue( 2, (1<<0)); // clear red
-					GPIO_ClearValue( 0,(1<<26)); //clear blue
-				}
 
 
+				caretakerFlag = true;
                 monitorFlag = false; // after sending first 'entering monitor mode', stop sending
                 break;
         }
