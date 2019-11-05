@@ -529,9 +529,6 @@ void fireOrDarkness(env *ptr)
 		UART_SendString(LPC_UART3, FireMsg);
 	}
 
-	printf("x is %d, y is %d, z is %d\n",x,y,z);
-	printf("accel value is %d\n", accelerationCal);
-
 	if (lightFlag == true && (accelerationCal >= ACCEL_LIMIT))
 	{
 		blink_blue = 1;         //raise blink blue flag when light intensity is low and movement is detected
@@ -589,8 +586,8 @@ int main (void)
 
             case 0:
                 monitorMode(monitorFlag); // start monitor mode
-                fireOrDarkness(ptr);
                 sampleEnv(ptr);
+                fireOrDarkness(ptr);
                 displayOnOled(ptr, oledFlag, charCounter);
 
 
