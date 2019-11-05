@@ -26,30 +26,41 @@
 #include "rgb.h"
 #include "temp.h"
 #include "light.h"
-
 #include "lpc17xx_uart.h"
 #include "uart2.h"
 
 #define TEMP_HIGH_WARNING 35
 #define LIGHT_LOW_WARNING 50
+
+#define LIGHT_UPPER_THRESHOLD 700
+#define LIGHT_LOWER_THRESHOLD 50
+
 #define ACCEL_LIMIT 10
 
 volatile uint32_t msTicks = 0;
-
-int switchCounter = 0;
-uint32_t endTime, startTime, initialTime;
-
 volatile uint8_t blink_blue = 0, blink_red = 0;
-volatile bool monitorStatus = false; // default mode is caretaker mode (false)
+volatile bool monitorStatus = false;
 
 const uint8_t ledArray[] = {'0','1','2','3','4','5','6','7','8','9','A','B','C','D','E','F'};
 
 int8_t x, y, z;
 int32_t xoff, yoff, zoff;
+uint32_t endTime, startTime, initialTime;
 
 bool lightFlag = false;
 bool mode, oledFlag, sendFlag;
 bool caretakerFlag = true;
+
+int switchCounter = 0;
+
+/** initialization for the monitor mode functions **/
+int monitorFlag = true;
+unsigned char monitorOled[] = "MONITOR";
+char floatArray[50] = {};
+char integerArray[50] = {};
+char nameMsg[64] = "";
+int msgCount = 0;
+/*************************************************/
 
 typedef struct envVariables
 {
@@ -68,9 +79,19 @@ uint32_t getTicks(void)
     return msTicks;
 }
 
-/****************
- *  Time Comparator Function
- ****************/
+/*********************************************************
+ * 			Time Comparator Function
+ *
+ * 	This function takes an 2 inputs, ticks, and a user
+ * 	defined value, delaydiff. It will compare difference
+ * 	in the current tick value with the value in ticks.
+ *
+ * 	If the delay difference is reached, it will return
+ * 	back to main.
+ *
+ * 	Inputs: ticks (unsigned 32bit integer)
+ * 			delaydiff (unsigned 32bit value, in seconds)
+ ********************************************************/
 uint32_t timeCompare (uint32_t ticks, uint32_t delaydiff)
 {
     delaydiff = delaydiff * 1000;
@@ -180,7 +201,20 @@ static void init_GPIO(void)
     PINSEL_ConfigPin(&PinCfg);
     GPIO_SetDir(1, 1<<31, 0);
 
+	// settings for light interrupt
+	PinCfg.Funcnum = 0;
+	PinCfg.OpenDrain = 0;
+	PinCfg.Pinmode = 0;
+	PinCfg.Portnum = 2;
+	PinCfg.Pinnum = 5;
+	PINSEL_ConfigPin(&PinCfg);
+	GPIO_SetDir(2, (1 << 5), 0);
+}
+
+static void eint0_init(void)
+{
     // Initialize Switch 3 using EINT0 for port 2 pin 10
+	PINSEL_CFG_Type PinCfg; // Configure Pin corresponding to specified parameters passed in the PinCfg.
     PinCfg.Funcnum = 1;
     PinCfg.OpenDrain = 0;
     PinCfg.Pinmode = 0;
@@ -192,15 +226,6 @@ static void init_GPIO(void)
 	LPC_SC->EXTINT = 1;
 	LPC_SC->EXTMODE |= 1<<0;
 	LPC_SC->EXTPOLAR &= ~(1 << 0);
-
-	// settings for light interrupt
-	PinCfg.Funcnum = 0;
-	PinCfg.OpenDrain = 0;
-	PinCfg.Pinmode = 0;
-	PinCfg.Portnum = 2;
-	PinCfg.Pinnum = 5;
-	PINSEL_ConfigPin(&PinCfg);
-	GPIO_SetDir(2, (1 << 5), 0);
 }
 
 /****************
@@ -221,7 +246,22 @@ void extInteruptInit(void)
 }
 
 
-
+/*********************************************************
+ * 			EINT3 Handler Function
+ *
+ * 	In main, the interupt is initialized via GPIO, port
+ * 	2 pin 5: <LPC_GPIOINT->IO2IntEnF |= 1 << 5;>
+ *
+ * 	This interupt will trigger if the current light lux falls
+ * 	below the user defined light threshold value, currently
+ * 	set at 50 lux. This is defined as a falling edge.
+ *
+ * 	Upon triggered, the interupt will clear the interupt
+ * 	of the handler, clear the interupt status of the light,
+ * 	and set a global flag, lightFlag to be true.
+ *
+ * 	Inputs: None
+ ********************************************************/
 void EINT3_IRQHandler(void)
 {
 	// EINT3 for light falling below threshold
@@ -233,7 +273,35 @@ void EINT3_IRQHandler(void)
 	}
 }
 
-
+/*********************************************************
+ * 			EINT0 Handler Function
+ *
+ * 	The interupt is initialized in eint0_init();
+ *
+ * 	The interupt will trigger if the switch 3 is pressed.
+ *
+ * 	Switchcounter will start from 0. Upon triggered
+ * 	by a switch press, the interupt will change
+ * 	switchcounter to 1, and obtain the current time via
+ * 	getTicks(), storing it in variable startTime.
+ *
+ * 	Similarly, if a second press is done, the interupt
+ * 	will trigger, but switchcounter being at 1 will activate
+ * 	the 'else' condition, obtaining currenttime via
+ * 	getTicks(), and changing switchcounter value to 2
+ * 	yet again.
+ *
+ * 	For both points, if endTime-startTime < 1000 &&
+ * 	switchCounter == 2, monitorstatus will become
+ * 	false and it will switch to caretaker mode. A message
+ * 	will also be sent via UART to NAME.
+ *
+ * 	In main, switchcounter is continously being reset
+ * 	to value of 0, if the presses are too long in
+ * 	between.
+ *
+ * 	Inputs: None
+ ********************************************************/
 void EINT0_IRQHandler(void)
 {
     // using EINT0 for interrupt
@@ -243,18 +311,15 @@ void EINT0_IRQHandler(void)
 		{
 			startTime = getTicks();
 			switchCounter = 1;
-			printf("1st Press, time = %d \n", startTime);
 		}
 		else
 		{
 			endTime = getTicks();
 			switchCounter = 2;
-			printf("2nd Press, time = %d \n", endTime);
 		}
 
 		if (endTime-startTime < 1000 && switchCounter == 2)
 		{
-			printf("leaving monitor mode \n");
 			switchCounter = 0;
 			monitorStatus = false;
 
@@ -264,20 +329,30 @@ void EINT0_IRQHandler(void)
 	}
     LPC_SC->EXTINT = (1<<0);
 }
-
-
+/*********************************************************
+ * 					init function
+ *
+ * 	This function initializes everything that is required
+ * 	from systick_config to all the baseboard/on chip
+ * 	peripherals in their various libraries.
+ *
+ * 	It sets the light low threshold to 50 and high to 700
+ * 	respectively. The current interupt status of the light
+ * 	if any, will be reset.
+ *
+ * 	Calculation of the current accelerometer values, will
+ * 	be stored in global variables x, y, z and the respective
+ * 	offsets will be calculated from there.
+ *
+ * 	Inputs: None
+ ********************************************************/
 void init(void)
 {
     SysTick_Config(SystemCoreClock/1000);
     init_i2c();
     init_ssp();
     init_GPIO();
-
-    acc_init();
-    acc_read(&x, &y, &z);
-    xoff = 0-x;
-    yoff = 0-y;
-    zoff = 0-z;
+    eint0_init();
 
     oled_init();
     led7seg_init ();
@@ -288,11 +363,31 @@ void init(void)
     init_uart();
     acc_init();
 
-    //light_setIrqInCycles(LIGHT_CYCLE_8);
-    light_setHiThreshold(700);
-    light_setLoThreshold(50);
+    light_setHiThreshold(LIGHT_UPPER_THRESHOLD);
+    light_setLoThreshold(LIGHT_LOWER_THRESHOLD);
     light_clearIrqStatus();
+
+    acc_init();
+	acc_read(&x, &y, &z); // obtain initial x,y,z values
+	xoff = 0-x; // calculate x initial offsets
+	yoff = 0-y; // calculate y initial offsets
+	zoff = 0-z; // calculate z initial offsets
 }
+
+/*********************************************************
+ * 					Caretaker function
+ *
+ *	This function takes in a single input, caretaker flag
+ *	to decide if it is the first run of the program. If
+ *	flag is true, ie. the program is running for the first
+ *	time/the program switched over from monitor mode,
+ *	a message is sent to NAME to indicate so.
+ *
+ *	The 7 segment display, OLED, led blink statuses,
+ *	and gpio led outputs are cleared.
+ *
+ * 	Inputs: bool caretakerFlag
+ ********************************************************/
 
 void caretakerMode(int caretakerFlag)
 {
@@ -309,22 +404,21 @@ void caretakerMode(int caretakerFlag)
     GPIO_ClearValue( 2, (1<<0) ); // clear red LED
 }
 
+/*********************************************************
+ * 				sevenSegmentOut function
+ *
+ *	This function will display on the 7 segment display,
+ *	the current charcounter value as defined by the array
+ *	ledArray. There is no logic here, all logic is contained
+ *	in the main program.
+ *
+ * 	Inputs: char charCounter
+ ********************************************************/
+
 void sevenSegmentOut(int charCounter)
 {
     led7seg_setChar((ledArray[charCounter%16]), FALSE);
 }
-
-/** initialization for the monitor functions **/
-int monitorFlag = true;
-unsigned char monitorOled[] = "MONITOR";
-
-char floatArray[50] = {};
-char integerArray[50] = {};
-
-unsigned char nameMsg[64] = "";
-int msgCount = 0;
-
-/*************************************************/
 
 void sampleEnv(env *ptr)
 {
@@ -341,6 +435,16 @@ void sampleEnv(env *ptr)
     ptr->accelZ = z;
 }
 
+/*********************************************************
+ * 				oled display function
+ *
+ *	This program will obtain values from the pointer to
+ *	struct, ptr, and output values onto the OLED display
+ *	at 5, A and F intervals.
+ *
+ * 	Inputs: env * ptr
+ ********************************************************/
+
 void oledDisplay(env *ptr)
 {
 	snprintf (floatArray, sizeof(floatArray), "Temp: %2.2fdegC", ptr->currentTemp); // print temperature
@@ -356,6 +460,15 @@ void oledDisplay(env *ptr)
     oled_putString (1, 50, integerArray, OLED_COLOR_WHITE, OLED_COLOR_BLACK);
 }
 
+/*********************************************************
+ * 				sendEnvVariables function
+ *
+ *	This program will obtain values from the pointer to
+ *	struct, ptr, and send values to NAME via UART. A
+ *	counter is used to increment the msgCount
+ *
+ * 	Inputs: env * ptr
+ ********************************************************/
 void SendEnvVariables(env *ptr)
 {
     snprintf (nameMsg, sizeof(nameMsg), "%03d_-_T%05.1f_L%05d_AX%05d_AY%05d_AZ%05d\r\n", msgCount, ptr->currentTemp, ptr->currentLight, ptr->accelX, ptr->accelY, ptr->accelZ);
@@ -363,7 +476,22 @@ void SendEnvVariables(env *ptr)
     msgCount += 1;
 }
 
-void monitorMode(int monitorFlag, env *ptr)
+/*********************************************************
+ * 				monitormode function
+ *
+ *	This function takes in a single input, monitor flag
+ *	to decide if it is the first run of the program. If
+ *	flag is true, ie. the program is running for the first
+ *	time/the program switched over from caretaker mode,
+ *	a message is sent to NAME to indicate so.
+ *
+ *	The oled display is set to continuously display
+ *	'MONITOR' at the top if monitor mode is active
+ *
+ * 	Inputs: monitorflag
+ ********************************************************/
+
+void monitorMode(int monitorFlag)
 {
 	if (monitorFlag == true)
     {
@@ -460,7 +588,7 @@ int main (void)
                 break;
 
             case 0:
-                monitorMode(monitorFlag, ptr); // start monitor mode
+                monitorMode(monitorFlag); // start monitor mode
                 fireOrDarkness(ptr);
                 sampleEnv(ptr);
                 displayOnOled(ptr, oledFlag, charCounter);
