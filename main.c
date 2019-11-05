@@ -47,6 +47,10 @@ const uint8_t ledArray[] = {'0','1','2','3','4','5','6','7','8','9','A','B','C',
 int8_t x, y, z;
 int32_t xoff, yoff, zoff;
 
+bool lightFlag = false;
+bool mode, oledFlag, sendFlag;
+bool caretakerFlag = true;
+
 typedef struct envVariables
 {
 	float currentTemp;
@@ -167,7 +171,7 @@ static void init_i2c(void)
 static void init_GPIO(void)
 {
     // Initialize Switch 4 using default config
-    PINSEL_CFG_Type PinCfg;
+    PINSEL_CFG_Type PinCfg; // Configure Pin corresponding to specified parameters passed in the PinCfg.
     PinCfg.Funcnum = 0;
     PinCfg.OpenDrain = 0;
     PinCfg.Pinmode = 0;
@@ -185,10 +189,18 @@ static void init_GPIO(void)
     PINSEL_ConfigPin(&PinCfg);
     GPIO_SetDir(2, 1 << 10, 0);
 
-    // Settings for EINT0 Interrupt
 	LPC_SC->EXTINT = 1;
 	LPC_SC->EXTMODE |= 1<<0;
 	LPC_SC->EXTPOLAR &= ~(1 << 0);
+
+	// settings for light interrupt
+	PinCfg.Funcnum = 0;
+	PinCfg.OpenDrain = 0;
+	PinCfg.Pinmode = 0;
+	PinCfg.Portnum = 2;
+	PinCfg.Pinnum = 5;
+	PINSEL_ConfigPin(&PinCfg);
+	GPIO_SetDir(2, (1 << 5), 0);
 }
 
 /****************
@@ -208,21 +220,17 @@ void extInteruptInit(void)
     NVIC_EnableIRQ(EINT3_IRQn);
 }
 
-volatile int8_t currentTemp;
+
 
 void EINT3_IRQHandler(void)
 {
-	// using EINT3 for interrupt
-
-	/*
-	// temperature rising/falling edge
-	if (((LPC_GPIOINT ->IO0IntStatF >> 2) & 0x1) || ((LPC_GPIOINT ->IO0IntStatR >> 2) & 0x1))
+	// EINT3 for light falling below threshold
+	if ((LPC_GPIOINT ->IO2IntStatF >> 5) & 0x1)
 	{
-		currentTemp = ((GPIO_ReadValue(0) & (1 << 2)) != 0);
-		printf("in eint3, currentTemp is %d\n", currentTemp);
-
-		LPC_GPIOINT -> IO0IntClr =  1 << 2;
-	}*/
+		LPC_GPIOINT->IO2IntClr |= (1 << 5);
+		light_clearIrqStatus();
+		lightFlag = true; // interrupt based update of light sensor
+	}
 }
 
 
@@ -271,9 +279,6 @@ void init(void)
     yoff = 0-y;
     zoff = 0-z;
 
-    //printf("x is %d, y is %d, z is %d\n",x,y,z);
-    //printf("xoff is %d, yoff is %d, zoff is %d\n",xoff,yoff,zoff);
-
     oled_init();
     led7seg_init ();
     rgb_init ();
@@ -283,6 +288,7 @@ void init(void)
     init_uart();
     acc_init();
 
+    //light_setIrqInCycles(LIGHT_CYCLE_8);
     light_setHiThreshold(700);
     light_setLoThreshold(50);
     light_clearIrqStatus();
@@ -333,14 +339,10 @@ void sampleEnv(env *ptr)
     ptr->accelX = x;
     ptr->accelY = y;
     ptr->accelZ = z;
-
 }
 
 void oledDisplay(env *ptr)
 {
-	//printf("accel x is %d, accel y is %d, accel z is %d\n",ptr->accelX,ptr->accelY,ptr->accelZ);
-	//printf("x is %d, y is %d, z is %d\n",x,y,z);
-
 	snprintf (floatArray, sizeof(floatArray), "Temp: %2.2fdegC", ptr->currentTemp); // print temperature
     oled_putString (1, 20, floatArray, OLED_COLOR_WHITE, OLED_COLOR_BLACK);
 
@@ -352,8 +354,6 @@ void oledDisplay(env *ptr)
 
     snprintf (integerArray, sizeof(integerArray), "Z:%d", ptr->accelZ); // print z accelerometer value on a new line
     oled_putString (1, 50, integerArray, OLED_COLOR_WHITE, OLED_COLOR_BLACK);
-
-    return;
 }
 
 void SendEnvVariables(env *ptr)
@@ -389,11 +389,11 @@ void displayOnOled(env *ptr, bool oledFlag, int charCounter)
 
 void fireOrDarkness(env *ptr)
 {
-	uint8_t x = ptr->accelX;
-	uint8_t y = ptr->accelY;
-	uint8_t z = ptr->accelZ;
+	int8_t x = ptr->accelX;
+	int8_t y = ptr->accelY;
+	int8_t z = ptr->accelZ;
+	int8_t accelerationCal = sqrt((x*x)+(y*y)+(z*z));
 
-	printf("current temp is %f\n", ptr->currentTemp);
 	if ((ptr->currentTemp) >= TEMP_HIGH_WARNING)
 	{
 		blink_red = 1;
@@ -401,7 +401,10 @@ void fireOrDarkness(env *ptr)
 		UART_SendString(LPC_UART3, FireMsg);
 	}
 
-	if (((ptr->currentLight) < LIGHT_LOW_WARNING) && (sqrt(x*x+y*y+z*z) >= ACCEL_LIMIT))
+	printf("x is %d, y is %d, z is %d\n",x,y,z);
+	printf("accel value is %d\n", accelerationCal);
+
+	if (lightFlag == true && (accelerationCal >= ACCEL_LIMIT))
 	{
 		blink_blue = 1;         //raise blink blue flag when light intensity is low and movement is detected
 		unsigned char DarkMovementMsg[] = "Movement in Darkness Detected\r\n";
@@ -409,34 +412,20 @@ void fireOrDarkness(env *ptr)
 	}
 }
 
-bool mode, oledFlag, sendFlag;
-bool caretakerFlag = true;
 
 int main (void)
 {
     init();
     extInteruptInit();
 
-    //LPC_GPIOINT -> IO2IntEnF |= 1<<10;
-
-
-
-    volatile static int charCounter = 0;
-
-    int sevenSegTicks = getTicks();
-    int rgbBothTicks = getTicks();
-
     env envValues;
     env *ptr = &envValues;
 
-    /*
-    GPIO_SetDir(0, (1 << 2), 0);
-    LPC_GPIOINT -> IO0IntEnF |= 1<<2; // if temp falls
-    LPC_GPIOINT -> IO0IntEnR |= 1<<2; // if temp rises
-    LPC_GPIOINT -> IO0IntClr =  1<<2; // clear the interrupt
-    currentTemp = ((GPIO_ReadValue(0) & (1 << 2)) != 0); // update current temp
-    printf("in main, current temp is %d\n", currentTemp);
-	*/
+    volatile static int charCounter = 0;
+    int sevenSegTicks = getTicks();
+    int rgbBothTicks = getTicks();
+
+    LPC_GPIOINT->IO2IntEnF |= 1 << 5; // light interupt triggered on falling edge
 
     oled_clearScreen(OLED_COLOR_BLACK);
 
@@ -465,6 +454,7 @@ int main (void)
                 caretakerFlag = false; // after sending first 'entering caretaker mode', stop sending
 
                 monitorFlag = true;
+                lightFlag = false;
                 charCounter = 0;
 
                 break;
